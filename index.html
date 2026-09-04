@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="ru">
 <head>
 <meta charset="utf-8"/>
@@ -46,7 +45,7 @@
 <!-- Основной дашборд -->
 <div class="hidden space-y-6" id="dashboardScreen"><div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-xl">
 <div class="flex items-center space-x-3">
-<h1 class="text-xl font-bold text-white">Дивидендный Портфель <span class="text-xs font-normal text-slate-400 ml-2">v1.5</span></h1>
+<h1 class="text-xl font-bold text-white">Дивидендный Портфель <span class="text-xs font-normal text-slate-400 ml-2">v1.6</span></h1>
 <span class="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Альфа-Инвестиции</span>
 </div>
 <div class="flex items-center space-x-3 w-full sm:w-auto">
@@ -273,10 +272,13 @@
     };
     const formatCurrency = (val) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 }).format(val || 0);
     const setText = (id,v) => { const el=document.getElementById(id); if(el) el.innerText=v; };
+
+    // FIXED: обработка неразрывных пробелов (\u00A0) из Excel
     const parseAmount = (val) => {
       if (typeof val === 'number') return val;
       if (!val) return 0;
-      const parsed = parseFloat(String(val).replace(/\s/g, '').replace(',', '.'));
+      const cleaned = String(val).replace(/[\s\u00A0]/g, '').replace(',', '.');
+      const parsed = parseFloat(cleaned);
       return isNaN(parsed) ? 0 : parsed;
     };
 
@@ -390,7 +392,7 @@
             if (!dateObj) return;
 
             let amountVal = 0;
-            for (let j = 10; j <= 16; j++) {
+            for (let j = 4; j < row.length; j++) {
               const val = parseAmount(row[j]);
               if (val > 0) { amountVal = val; break; }
             }
@@ -473,7 +475,6 @@
           });
         }
 
-        // Дополнительная аналитика: используем исходную структуру отчёта, не меняя рабочий парсер позиций/выплат.
         state.workbook = wb;
         state.transactions = buildTransactionsFromWorkbook(wb);
         state.rawCashFlow = state.transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal').map(t => ({ dateObj:t.dateObj, type:t.type, amount:Math.abs(t.amount) }));
@@ -531,139 +532,175 @@
       const out=[];
       const cashName=wb.SheetNames.find(n=>n.toLowerCase().includes('движение'));
       if(cashName){
-        XLSX.utils.sheet_to_json(wb.Sheets[cashName],{header:1,defval:null}).forEach((r,i)=>{
-          if(!r || r.length < 5) return;
-          const text = r.map(c=>String(c||'').toLowerCase()).join(' ');
-          if(/репо/.test(text)) return;
+        const rows=XLSX.utils.sheet_to_json(wb.Sheets[cashName],{header:1,defval:null});
 
-          let d = null;
-          r.forEach(c => {
-            if (c instanceof Date && !isNaN(c)) d = c;
-            else if (/\d{2}\.\d{2}\.\d{4}/.test(String(c))) {
-              const m = String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
-              if(m) d = new Date(`${m[3]}-${m[2]}-${m[1]}`);
+        // FIXED v2: динамический поиск колонок «Приход»/«Расход» по шапке листа
+        let colIn=-1,colOut=-1,headerRow=-1;
+        for(let i=0;i<Math.min(rows.length,8);i++){
+          const r=rows[i]||[];let ci=-1,co=-1;
+          r.forEach((c,idx)=>{
+            const s=String(c||'').toLowerCase().trim();
+            if(!s)return;
+            if(ci<0&&/приход/.test(s))ci=idx;
+            if(co<0&&/расход/.test(s))co=idx;
+          });
+          if(ci>-1&&co>-1&&ci!==co){colIn=ci;colOut=co;headerRow=i;break;}
+        }
+
+        rows.forEach((r,i)=>{
+          if(!r||r.length<5)return;
+          if(headerRow>-1&&i<=headerRow)return;
+          const text=r.map(c=>String(c||'').toLowerCase()).join(' ');
+          if(/репо/.test(text))return;
+
+          let d=null;
+          r.forEach(c=>{
+            if(c instanceof Date&&!isNaN(c))d=c;
+            else if(/\d{2}\.\d{2}\.\d{4}/.test(String(c))){
+              const m=String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
+              if(m)d=new Date(`${m[3]}-${m[2]}-${m[1]}`);
             }
           });
-          if (!d) return;
+          if(!d)return;
 
-          let amount = 0;
-          for (let j = 8; j <= 24; j++) {
-            const val = parseAmount(r[j]);
-            if (val > 0) { amount = val; break; }
+          // FIXED v2: сумма и направление берутся из колонок Приход/Расход
+          let amount=0,dir=0; // 1 = приход, -1 = расход
+          if(colIn>-1){
+            const vin=parseAmount(r[colIn]),vout=parseAmount(r[colOut]);
+            if(vin>0){amount=vin;dir=1;}
+            else if(vout>0){amount=vout;dir=-1;}
           }
-          if (amount === 0) return;
+          if(amount===0){
+            for(let j=4;j<r.length;j++){
+              const val=parseAmount(r[j]);
+              if(val!==0){amount=val;break;}
+            }
+          }
+          if(amount===0)return;
 
-          const opStr = r.filter(c => typeof c === 'string' && c.length > 3 && !c.match(/\d{2}\.\d{2}\.\d{4}/)).join(' ').replace(/\s+/g,' ').trim();
-          const isDeposit = /(ввод|пополнение|зачисление|внесение)/i.test(text) && !/(купон|дивиденд|погашение|списание)/i.test(text);
-          const isWithdrawal = /(вывод|списание|удержание)/i.test(text) && !/(комисси|налог|ндфл|покупк|купон|дивиденд|зачисление)/i.test(text);
-          const isDiv = /(дивиденд|компенсация)/i.test(text);
-          const isCoupon = /(купон)/i.test(text);
-          const isTax = /(ндфл|налог)/i.test(text);
-          const isFee = /(комисси)/i.test(text);
+          const opStr=r.filter(c=>typeof c==='string'&&c.length>3&&!c.match(/\d{2}\.\d{2}\.\d{4}/)).join(' ').replace(/\s+/g,' ').trim();
 
-          let type = 'other', label = 'Прочее', sign = 1;
-          let asset = extractAssetFromComment(opStr);
+          // FIXED v2: приоритет — сначала исключаем выплаты/налоги/комиссии
+          const isDiv=/(дивиденд|компенсация)/i.test(text);
+          const isCoupon=/(купон)/i.test(text);
+          const isTax=/(ндфл|налог)/i.test(text);
+          const isFee=/(комисси)/i.test(text);
 
-          if (isDeposit) { type = 'deposit'; label = 'Пополнение'; sign = 1; asset = 'Денежные средства'; }
-          else if (isWithdrawal) { type = 'withdrawal'; label = 'Вывод'; sign = -1; asset = 'Денежные средства'; }
-          else if (isDiv) { type = 'dividend'; label = 'Дивиденд'; sign = 1; }
-          else if (isCoupon) { type = 'coupon'; label = 'Купон'; sign = 1; }
-          else if (isTax) { type = 'tax'; label = 'Налог'; sign = -1; asset = asset || 'Налог'; }
-          else if (isFee) { type = 'commission'; label = 'Комиссия'; sign = -1; asset = asset || 'Брокерская комиссия'; }
-          else { sign = /(списан|удержан|вывод|минус)/i.test(text) ? -1 : 1; }
+          // FIXED v2: маркеры пополнений с учётом кавычек и формулировок Альфы
+          const depositRe=/(ввод|пополнение|зачисление|внесение|приход|из\s+(?:ао\s*["«']?\s*)?альфа)/i;
+          const withdrawalRe=/(вывод|возврат|на\s+банковский\s+счет|в\s+(?:ао\s*["«']?\s*)?альфа-банк|списание\s+на)/i;
+          let isDeposit=false,isWithdrawal=false;
+          if(!isDiv&&!isCoupon&&!isTax&&!isFee){
+            if(dir===1)isDeposit=true;              // всё, что пришло и не выплата — пополнение
+            else if(dir===-1)isWithdrawal=true;     // всё, что ушло и не налог/комиссия — вывод
+            else if(depositRe.test(text))isDeposit=true;
+            else if(withdrawalRe.test(text))isWithdrawal=true;
+          }
 
-          out.push({dateObj: d, type, label, asset: asset || '—', amount: amount * sign, qty: 0, price: 0, comment: opStr.substring(0, 150), source: 'cash', row: i});
+          let type='other',label='Прочее',sign=1;
+          let asset=extractAssetFromComment(opStr);
+
+          if(isDeposit){type='deposit';label='Пополнение';sign=1;asset='Денежные средства';}
+          else if(isWithdrawal){type='withdrawal';label='Вывод';sign=-1;asset='Денежные средства';}
+          else if(isDiv){type='dividend';label='Дивиденд';sign=1;}
+          else if(isCoupon){type='coupon';label='Купон';sign=1;}
+          else if(isTax){type='tax';label='Налог';sign=-1;asset=asset||'Налог';}
+          else if(isFee){type='commission';label='Комиссия';sign=-1;asset=asset||'Брокерская комиссия';}
+          else{sign=/(списан|удержан|вывод|минус)/i.test(text)?-1:1;}
+
+          out.push({dateObj:d,type,label,asset:asset||'—',amount:Math.abs(amount)*sign,qty:0,price:0,comment:opStr.substring(0,150),source:'cash',row:i});
         });
       }
-      
+
       const tradesName=wb.SheetNames.find(n=>n.toLowerCase().includes('сделк')||n.toLowerCase().includes('завершенные'));
       if(tradesName){
         XLSX.utils.sheet_to_json(wb.Sheets[tradesName],{header:1,defval:null}).forEach((r,i)=>{
-          if(!r || r.length < 5) return;
-          const text = r.map(c=>String(c||'').toLowerCase()).join(' ');
-          if(/репо/.test(text)) return;
+          if(!r||r.length<5)return;
+          const text=r.map(c=>String(c||'').toLowerCase()).join(' ');
+          if(/репо/.test(text))return;
 
-          let d = null;
-          r.forEach(c => {
-            if (c instanceof Date && !isNaN(c)) d = c;
-            else if (/\d{2}\.\d{2}\.\d{4}/.test(String(c))) {
-              const m = String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
-              if(m) d = new Date(`${m[3]}-${m[2]}-${m[1]}`);
+          let d=null;
+          r.forEach(c=>{
+            if(c instanceof Date&&!isNaN(c))d=c;
+            else if(/\d{2}\.\d{2}\.\d{4}/.test(String(c))){
+              const m=String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
+              if(m)d=new Date(`${m[3]}-${m[2]}-${m[1]}`);
             }
           });
-          if (!d) return;
+          if(!d)return;
 
-          let isin = '', isinIdx = -1;
-          r.forEach((c, idx) => {
-            const m = String(c || '').trim().match(/(RU[A-Z0-9]{10}|US[A-Z0-9]{10})/);
-            if (m) { isin = m[1]; isinIdx = idx; }
+          let isin='',isinIdx=-1;
+          r.forEach((c,idx)=>{
+            const m=String(c||'').trim().match(/\b(RU[A-Z0-9]{10}|US[A-Z0-9]{10})\b/);
+            if(m){isin=m[1];isinIdx=idx;}
           });
 
-          const nums = [];
-          r.forEach((c, idx) => {
-            if (idx > (isinIdx > -1 ? isinIdx : 5)) {
-               const v = parseAmount(c);
-               if (v !== 0 && typeof c !== 'boolean' && !String(c).match(/\d{2}\.\d{2}\.\d{4}/)) {
+          const nums=[];
+          r.forEach((c,idx)=>{
+            if(idx>(isinIdx>-1?isinIdx:5)){
+               const v=parseAmount(c);
+               if(v!==0&&typeof c!=='boolean'&&!String(c).match(/\d{2}\.\d{2}\.\d{4}/)){
                  nums.push(v);
                }
             }
           });
 
-          if (nums.length < 2) return;
+          if(nums.length<2)return;
 
-          let qty = nums[0];
-          let buy = text.includes('покупка');
-          let sell = text.includes('продажа');
+          let qty=nums[0];
+          let buy=text.includes('покупка');
+          let sell=text.includes('продажа');
 
-          if (!buy && !sell) {
-            buy = qty > 0;
-            sell = qty < 0;
+          if(!buy&&!sell){
+            buy=qty>0;
+            sell=qty<0;
           }
-          qty = Math.abs(qty);
-          let price = Math.abs(nums[1]);
-          let val = nums.length >= 3 ? Math.abs(nums[2]) : qty * price;
+          qty=Math.abs(qty);
+          let price=Math.abs(nums[1]);
+          let val=nums.length>=3?Math.abs(nums[2]):qty*price;
 
-          let fee = 0;
-          if (nums.length >= 5) {
-             for (let k = 3; k < nums.length; k++) {
-                 if (Math.abs(nums[k]) < val * 0.1) fee += Math.abs(nums[k]);
+          // FIXED v2: комиссии по сделкам ловим и при 4 числовых колонках
+          let fee=0;
+          if(nums.length>=4){
+             for(let k=3;k<nums.length;k++){
+                 if(Math.abs(nums[k])<val*0.1)fee+=Math.abs(nums[k]);
              }
           }
 
-          let possibleNames = r.filter(c => typeof c === 'string' && c.length > 2 && c !== isin && !c.match(/\d{2}\.\d{2}\.\d{4}/) && !c.toLowerCase().includes('покупка') && !c.toLowerCase().includes('продажа'));
-          let asset = possibleNames.length > 0 ? possibleNames[0].trim().replace(/\s+/g,' ') : isin;
+          let possibleNames=r.filter(c=>typeof c==='string'&&c.length>2&&c!==isin&&!c.match(/\d{2}\.\d{2}\.\d{4}/)&&!c.toLowerCase().includes('покупка')&&!c.toLowerCase().includes('продажа'));
+          let asset=possibleNames.length>0?possibleNames[0].trim().replace(/\s+/g,' '):isin;
 
-          out.push({dateObj: d, type: buy ? 'buy' : 'sell', label: buy ? 'Покупка' : 'Продажа', asset, isin, amount: buy ? -val : val, qty, price, comment: 'Сделка ' + (isin || asset), source: 'trade', row: i});
-          
-          if (fee > 0) {
-            out.push({dateObj: d, type: 'commission', label: 'Комиссия', asset, isin, amount: -fee, qty: 0, price: 0, comment: 'Комиссия по сделке', source: 'trade', row: i});
+          out.push({dateObj:d,type:buy?'buy':'sell',label:buy?'Покупка':'Продажа',asset,isin,amount:buy?-val:val,qty,price,comment:'Сделка '+(isin||asset),source:'trade',row:i});
+
+          if(fee>0){
+            out.push({dateObj:d,type:'commission',label:'Комиссия',asset,isin,amount:-fee,qty:0,price:0,comment:'Комиссия по сделке',source:'trade',row:i});
           }
         });
       }
-      
+
       const ntName=wb.SheetNames.find(n=>n.toLowerCase().includes('неторговые'));
       if(ntName){
         XLSX.utils.sheet_to_json(wb.Sheets[ntName],{header:1,defval:null}).forEach((r,i)=>{
-          if(!r) return;
-          let d = null;
-          r.forEach(c => {
-            if (c instanceof Date && !isNaN(c)) d = c;
-            else if (/\d{2}\.\d{2}\.\d{4}/.test(String(c))) {
-              const m = String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
-              if(m) d = new Date(`${m[3]}-${m[2]}-${m[1]}`);
+          if(!r)return;
+          let d=null;
+          r.forEach(c=>{
+            if(c instanceof Date&&!isNaN(c))d=c;
+            else if(/\d{2}\.\d{2}\.\d{4}/.test(String(c))){
+              const m=String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
+              if(m)d=new Date(`${m[3]}-${m[2]}-${m[1]}`);
             }
           });
-          if (!d) return;
+          if(!d)return;
 
-          const text = r.map(c=>String(c||'').toLowerCase()).join(' ');
-          const opStr = r.filter(c => typeof c === 'string' && c.length > 3 && !c.match(/\d{2}\.\d{2}\.\d{4}/)).join(' ').replace(/\s+/g,' ').trim();
-          let amount = 0;
-          r.forEach(c => { const v = parseAmount(c); if(v > 0 && String(c).indexOf('.') > -1) amount = v; });
+          const text=r.map(c=>String(c||'').toLowerCase()).join(' ');
+          const opStr=r.filter(c=>typeof c==='string'&&c.length>3&&!c.match(/\d{2}\.\d{2}\.\d{4}/)).join(' ').replace(/\s+/g,' ').trim();
+          let amount=0;
+          r.forEach(c=>{const v=parseAmount(c);if(v>0&&String(c).indexOf('.')>-1)amount=v;});
 
-          let isin = (opStr.match(/(?:RU|US)[A-Z0-9]{10}/)||[])[0]||'';
-          let asset = extractAssetFromComment(opStr) || isin || 'Неторговая операция';
+          let isin=(opStr.match(/\b(?:RU|US)[A-Z0-9]{10}\b/)||[])[0]||'';
+          let asset=extractAssetFromComment(opStr)||isin||'Неторговая операция';
 
-          out.push({dateObj:d, type:'other', label:'Неторговая операция', asset, isin, amount, qty:amount, price:0, comment: opStr.substring(0, 150), source:'nontrade', row:i});
+          out.push({dateObj:d,type:'other',label:'Неторговая операция',asset,isin,amount,qty:amount,price:0,comment:opStr.substring(0,150),source:'nontrade',row:i});
         });
       }
 
@@ -829,7 +866,8 @@
       setText('cashDivsEl',formatCurrency(totalDiv));
       const tradeFees=(state.transactions||[]).filter(x=>x.type==='commission'&&x.source==='trade').reduce((s,x)=>s+Math.abs(x.amount||0),0);
       const cashFees=(state.transactions||[]).filter(x=>x.type==='commission'&&x.source==='cash').reduce((s,x)=>s+Math.abs(x.amount||0),0);
-      const fees=tradeFees>0?tradeFees:cashFees;
+      // FIXED v2: суммируем комиссии по сделкам И комиссии за обслуживание
+      const fees=tradeFees+cashFees;
       setText('cashFeesEl',formatCurrency(fees));
     }
 
@@ -859,7 +897,7 @@
       Object.keys(depositsByYear).forEach(y => yearsSet.add(Number(y)));
       state.payments.forEach(p => yearsSet.add(p.dateObj.getFullYear()));
       const allCapitalYears = Array.from(yearsSet).sort((a,b) => a - b);
-      
+
       if (allCapitalYears.length === 0) {
         allCapitalYears.push(new Date().getFullYear());
       }
@@ -880,7 +918,7 @@
       const byYear = {};
       filtered.forEach(p => { const y = p.dateObj.getFullYear(); byYear[y] = (byYear[y] || 0) + p.netAmount; });
       const years = Object.keys(byYear).sort();
-      
+
       if (state.charts.yearly) state.charts.yearly.destroy();
       state.charts.yearly = new Chart(document.getElementById('yearlyChart'), {
         type: 'bar',
@@ -890,7 +928,7 @@
 
       let cum = 0;
       const cumData = filtered.map(p => { cum += p.netAmount; return { x: p.dateObj.toLocaleDateString('ru-RU'), y: cum }; });
-      
+
       if (state.charts.cumulative) state.charts.cumulative.destroy();
       state.charts.cumulative = new Chart(document.getElementById('cumulativeChart'), {
         type: 'line',
@@ -898,13 +936,13 @@
         options: {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
-          plugins: { 
+          plugins: {
             legend: { display: false },
             tooltip: { callbacks: { label: function(context) { return 'Сумма: ' + new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(context.parsed.y); } } }
           },
-          scales: { 
-            x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 8 } }, 
-            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } 
+          scales: {
+            x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 8 } },
+            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
           }
         }
       });
@@ -961,6 +999,7 @@
       });
 
       const tbody = document.getElementById('payoutsTableBody');
+      if (!tbody) return;
       tbody.innerHTML = filtered.slice().reverse().map(p => `
         <tr class="hover:bg-slate-800/40 transition-colors">
           <td class="px-6 py-3 text-slate-400">${p.dateObj.toLocaleDateString('ru-RU')}</td>
