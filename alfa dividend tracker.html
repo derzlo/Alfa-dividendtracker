@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Дивидендный Портфель | Альфа-Инвестиции</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS (xlsx) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+  <div id="app" class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+    
+    <!-- Экран загрузки -->
+    <div id="uploadScreen" class="min-h-[80vh] flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-800 rounded-3xl bg-slate-900/40 text-center cursor-pointer hover:border-red-500/50 transition">
+      <div class="text-6xl mb-4">📊</div>
+      <h1 class="text-3xl font-bold text-white mb-2">Дивидендный Трекер</h1>
+      <p class="text-slate-400 mb-6 text-sm">Перетащите генеральный брокерский отчёт Альфа-Инвестиций (.xlsx) или выберите файл</p>
+      
+      <label class="bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-xl cursor-pointer font-semibold transition text-sm shadow-lg mb-8">
+        Выбрать файл отчёта
+        <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
+      </label>
+
+      <!-- Инструкция как скачать отчёт -->
+      <div class="bg-slate-950/60 border border-slate-800 rounded-2xl p-5 max-w-lg text-left text-xs text-slate-300 space-y-2 cursor-default" onclick="event.stopPropagation()">
+        <div class="font-bold text-white flex items-center space-x-1.5">
+          <span>💡</span>
+          <span>Как выгрузить отчёт в мобильном приложении:</span>
+        </div>
+        <p class="text-slate-400 leading-relaxed">
+          Перейдите в раздел <strong class="text-slate-200">«Главный»</strong> → нажмите на своё имя → <strong class="text-slate-200">Действия</strong> → <strong class="text-slate-200">Отчёты</strong> → <strong class="text-slate-200">Заказ документов</strong> → <strong class="text-slate-200">Отчёт</strong> → <strong class="text-slate-200">Брокерский отчёт</strong> (за нужный период).
+        </p>
+      </div>
+
+      <div id="loadingText" class="mt-4 text-red-400 text-sm font-medium hidden">⏳ Обработка отчёта...</div>
+    </div>
+
+    <!-- Основной дашборд -->
+    <div id="dashboardScreen" class="hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-xl">
+        <div class="flex items-center space-x-3">
+          <h1 class="text-xl font-bold text-white">Дивидендный Портфель</h1>
+          <span class="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Альфа-Инвестиции</span>
+        </div>
+        <div class="flex items-center space-x-3 w-full sm:w-auto">
+          <button id="refreshMoexBtn" class="flex-1 sm:flex-none bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-4 py-2.5 rounded-xl text-xs font-medium transition flex items-center justify-center space-x-2">
+            <span>🔄 Обновить MOEX</span>
+          </button>
+          <button id="resetBtn" class="flex-1 sm:flex-none bg-slate-800/60 hover:bg-slate-700 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-xs font-medium transition border border-slate-700/60">
+            Другой файл
+          </button>
+        </div>
+      </div>
+
+      <section class="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800/80 border border-slate-800/90 rounded-3xl p-6 sm:p-8 shadow-2xl relative">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div>
+            <div class="text-xs uppercase font-semibold text-slate-400 tracking-wider">Текущая стоимость активов</div>
+            <div id="portfolioValueEl" class="text-4xl sm:text-5xl font-extrabold text-white mt-2 tracking-tight">0 ₽</div>
+            <div class="flex items-center gap-3 mt-3">
+              <div id="portfolioDiffEl" class="inline-flex items-center space-x-1 px-3 py-1 rounded-xl text-sm font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                +0 ₽ (+0%)
+              </div>
+              <span id="portfolioCostEl" class="text-xs text-slate-400">от суммы покупок</span>
+            </div>
+          </div>
+          <div class="bg-slate-950/60 border border-slate-800/80 p-4 rounded-2xl">
+            <span class="text-xs text-slate-400">Статус котировок</span>
+            <div class="flex items-center space-x-1.5 mt-1">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span id="moexStatusEl" class="text-xs font-semibold text-slate-200">Оценка из отчёта</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
+          <div class="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5">Всего получено выплат</div>
+          <div id="totalNetEl" class="text-2xl font-bold text-emerald-400">0 ₽</div>
+          <div class="text-xs text-slate-400 mt-2">Удержан налог: <span id="totalTaxEl" class="text-slate-300 font-medium">0 ₽</span></div>
+        </div>
+        <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
+          <div class="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5">Среднемесячный поток</div>
+          <div id="avgMonthlyEl" class="text-2xl font-bold text-blue-400">0 ₽</div>
+          <div id="monthsCountEl" class="text-xs text-slate-500 mt-2">За 0 мес. истории</div>
+        </div>
+        <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Выплаты за год</div>
+            <select id="cardYearSelect" class="bg-slate-950 border border-slate-700 text-xs text-slate-200 rounded-lg px-2 py-0.5 focus:outline-none focus:border-amber-500 font-semibold cursor-pointer">
+              <option value="all">Все года</option>
+            </select>
+          </div>
+          <div id="cardYearPayoutsEl" class="text-2xl font-bold text-amber-400 mt-2">0 ₽</div>
+          <div class="text-xs text-slate-500 mt-2">Налог за период: <span id="cardYearTaxEl" class="text-slate-300 font-medium">0 ₽</span></div>
+        </div>
+      </section>
+
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-lg">
+        <div class="p-5 border-b border-slate-800 flex justify-between items-center">
+          <h2 class="text-base font-bold text-white">💼 Текущий портфель</h2>
+          <div id="positionsCountEl" class="text-sm font-bold font-mono text-purple-400 bg-purple-500/10 border border-purple-500/20 px-3 py-1.5 rounded-xl">0 активов</div>
+        </div>
+        <div class="overflow-x-auto max-h-96">
+          <table class="w-full text-left text-xs text-slate-300 font-mono">
+            <thead class="bg-slate-950 uppercase text-slate-400 sticky top-0 z-10">
+              <tr>
+                <th class="px-5 py-3.5">Тикер</th>
+                <th class="px-5 py-3.5">Актив / Компания</th>
+                <th class="px-5 py-3.5 text-right">Количество</th>
+                <th class="px-5 py-3.5 text-right">Покупка (ср.)</th>
+                <th class="px-5 py-3.5 text-right">Текущая цена</th>
+                <th class="px-5 py-3.5 text-right">Стоимость</th>
+                <th class="px-5 py-3.5 text-right">Доля</th>
+              </tr>
+            </thead>
+            <tbody id="portfolioTableBody" class="divide-y divide-slate-800/60"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="flex gap-2">
+        <button data-filter="all" class="filter-btn px-4 py-2 rounded-xl text-xs font-medium transition-colors bg-blue-600 text-white">Все выплаты</button>
+        <button data-filter="dividend" class="filter-btn px-4 py-2 rounded-xl text-xs font-medium transition-colors bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800">Только дивиденды</button>
+        <button data-filter="coupon" class="filter-btn px-4 py-2 rounded-xl text-xs font-medium transition-colors bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800">Только купоны</button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-lg">
+          <h3 class="text-sm font-semibold mb-4 text-slate-200">Выплаты по годам (YoY)</h3>
+          <div class="h-64"><canvas id="yearlyChart"></canvas></div>
+        </div>
+        <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-lg">
+          <h3 class="text-sm font-semibold mb-4 text-slate-200">Накопительный денежный поток</h3>
+          <div class="h-64"><canvas id="cumulativeChart"></canvas></div>
+        </div>
+        <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-lg">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-sm font-semibold text-slate-200">Выплаты по месяцам</h3>
+            <select id="chartYearSelect" class="bg-slate-950 border border-slate-700 text-xs text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-blue-500 cursor-pointer">
+              <option value="all">Все года</option>
+            </select>
+          </div>
+          <div class="h-64"><canvas id="monthlyChart"></canvas></div>
+        </div>
+        <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-lg">
+          <h3 class="text-sm font-semibold mb-4 text-slate-200">Топ доноров дохода</h3>
+          <div class="h-64 flex items-center justify-center"><canvas id="donorsChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-lg">
+        <div class="p-6 border-b border-slate-800 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+          <h2 class="text-lg font-bold text-white">📋 Журнал всех выплат</h2>
+          <input type="text" id="searchInput" placeholder="Поиск по активу..." class="w-full sm:w-64 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:border-blue-500 transition" />
+        </div>
+        <div class="overflow-x-auto max-h-96">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-950 uppercase text-slate-400 sticky top-0 z-10">
+              <tr>
+                <th class="px-6 py-3.5">Дата</th>
+                <th class="px-6 py-3.5">Тип</th>
+                <th class="px-6 py-3.5">Актив</th>
+                <th class="px-6 py-3.5 text-right">Чистыми</th>
+                <th class="px-6 py-3.5 text-right">Налог</th>
+              </tr>
+            </thead>
+            <tbody id="payoutsTableBody" class="divide-y divide-slate-800/60 font-mono"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let state = { payments: [], positions: [], moexData: {}, filter: 'all', searchQuery: '', selectedCardYear: '2026', selectedChartYear: 'all', charts: {} };
+    const KNOWN_TICKERS = {
+      'RU000A0JPNM1': 'IRAO', 'RU000A108X38': 'X5', 'RU0009024277': 'LKOH',
+      'RU0009033591': 'TATN', 'RU0009029540': 'SBER', 'RU0009091573': 'TRNFP',
+      'RU000A100Q43': 'AKEU', 'RU000A100HQ5': 'RSHU', 'RU000A102EK1': 'TBIO',
+      'US7496552057': 'AGRO', 'RU000A1071D5': 'TKIB', 'RU000A103VN7': 'TCBR'
+    };
+    const formatCurrency = (val) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 }).format(val || 0);
+    const parseAmount = (val) => {
+      if (typeof val === 'number') return val;
+      if (!val) return 0;
+      const parsed = parseFloat(String(val).replace(/\s/g, '').replace(',', '.'));
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
+    const uploadScreen = document.getElementById('uploadScreen');
+    const fileInput = document.getElementById('fileInput');
+    const loadingText = document.getElementById('loadingText');
+
+    uploadScreen.addEventListener('click', () => fileInput.click());
+    uploadScreen.addEventListener('dragover', (e) => { e.preventDefault(); uploadScreen.classList.add('border-red-500'); });
+    uploadScreen.addEventListener('dragleave', () => uploadScreen.classList.remove('border-red-500'));
+    uploadScreen.addEventListener('drop', async (e) => { e.preventDefault(); uploadScreen.classList.remove('border-red-500'); if (e.dataTransfer.files.length > 0) await processFile(e.dataTransfer.files[0]); });
+    fileInput.addEventListener('change', async (e) => { if (e.target.files.length > 0) await processFile(e.target.files[0]); });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      document.getElementById('dashboardScreen').classList.add('hidden');
+      uploadScreen.classList.remove('hidden');
+      state.payments = []; state.positions = [];
+    });
+
+    document.getElementById('refreshMoexBtn').addEventListener('click', () => fetchMoexQuotes());
+    document.getElementById('searchInput').addEventListener('input', (e) => { state.searchQuery = e.target.value; renderPayoutsTable(); });
+    document.getElementById('cardYearSelect').addEventListener('change', (e) => { state.selectedCardYear = e.target.value; renderMetrics(); });
+    document.getElementById('chartYearSelect').addEventListener('change', (e) => { state.selectedChartYear = e.target.value; renderCharts(); });
+
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.filter-btn').forEach(b => { b.className = 'filter-btn px-4 py-2 rounded-xl text-xs font-medium transition-colors bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'; });
+        e.target.className = 'filter-btn px-4 py-2 rounded-xl text-xs font-medium transition-colors bg-blue-600 text-white';
+        state.filter = e.target.dataset.filter;
+        renderCharts(); renderPayoutsTable();
+      });
+    });
+
+    async function fetchMoexQuotes() {
+      if (!state.positions.length) return;
+      document.getElementById('moexStatusEl').innerText = 'Запрос котировок MOEX...';
+      const urls = [
+        'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities.json?iss.meta=off',
+        'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQTF/securities.json?iss.meta=off'
+      ];
+      const newMap = {}; let matched = 0;
+      for (let raw of urls) {
+        const endpoints = [raw, `https://corsproxy.io/?${encodeURIComponent(raw)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`];
+        for (let ep of endpoints) {
+          try {
+            const res = await fetch(ep); if (!res.ok) continue;
+            const json = await res.json();
+            const marketRows = json.marketdata?.data || [];
+            const mSecId = json.marketdata?.columns.indexOf('SECID');
+            const mLast = json.marketdata?.columns.indexOf('LAST');
+            const live = {};
+            marketRows.forEach(r => { if (r[mSecId] && r[mLast]) live[r[mSecId]] = parseFloat(r[mLast]); });
+
+            const secRows = json.securities?.data || [];
+            const sSecId = json.securities?.columns.indexOf('SECID');
+            const sIsin = json.securities?.columns.indexOf('ISIN');
+            const sPrev = json.securities?.columns.indexOf('PREVPRICE');
+
+            secRows.forEach(r => {
+              const secid = r[sSecId], isin = r[sIsin];
+              const price = live[secid] || parseFloat(r[sPrev]) || 0;
+              if (price > 0) {
+                if (isin) newMap[isin] = { secid, price };
+                if (secid) newMap[secid] = { secid, price };
+                matched++;
+              }
+            });
+            if (secRows.length) break;
+          } catch(e) {}
+        }
+      }
+      if (matched > 0) {
+        state.moexData = newMap;
+        document.getElementById('moexStatusEl').innerText = `Мосбиржа онлайн (${new Date().toLocaleTimeString('ru-RU')})`;
+        renderPortfolio(); renderMetrics();
+      } else {
+        document.getElementById('moexStatusEl').innerText = 'Не удалось обновить (ошибка сети)';
+      }
+    }
+
+    async function processFile(file) {
+      loadingText.classList.remove('hidden');
+      try {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+
+        const cashName = wb.SheetNames.find(n => n.toLowerCase().includes('движение'));
+        let payments = [];
+        if (cashName) {
+          const raw = XLSX.utils.sheet_to_json(wb.Sheets[cashName], { header: 1 });
+          raw.forEach((row, i) => {
+            if (!row || row.length < 5) return;
+            const text = row.map(c => String(c || '').toLowerCase()).join(' ');
+            if (!text.includes('дивиденд') && !text.includes('купон')) return;
+
+            let dateObj = null;
+            row.forEach(c => {
+              if (c instanceof Date) { dateObj = c; }
+              else if (/\d{2}\.\d{2}\.\d{4}/.test(String(c))) {
+                const m = String(c).match(/(\d{2})\.(\d{2})\.(\d{4})/);
+                dateObj = new Date(`${m[3]}-${m[2]}-${m[1]}`);
+              }
+            });
+
+            let comment = '';
+            row.forEach(c => { if (String(c).toLowerCase().includes('дивиденд') || String(c).toLowerCase().includes('купон')) comment = String(c); });
+
+            let net = 0;
+            for (let j = 10; j <= 16; j++) {
+              const val = parseAmount(row[j]);
+              if (val > 0 && val < 10000000) { net = val; break; }
+            }
+            if (!dateObj || net === 0) return;
+
+            const isDiv = comment.toLowerCase().includes('дивиденд');
+            const assetMatch = comment.match(/(?:по акциям|акциям|облигации|АО|ПАО|гдр)\s+([^.\(\)]+)/i);
+            const asset = assetMatch ? assetMatch[1].trim().substring(0, 50) : comment.substring(0, 80);
+            const taxMatch = comment.match(/\(Удержан налог\s+(\d+(?:\.\d+)?)\s*руб\.\)/i);
+            const tax = taxMatch ? parseFloat(taxMatch[1]) : 0;
+
+            payments.push({ id: i, dateObj, type: isDiv ? 'dividend' : 'coupon', typeName: isDiv ? 'Дивиденд' : 'Купон', asset, netAmount: net, tax });
+          });
+          payments.sort((a, b) => a.dateObj - b.dateObj);
+        }
+
+        const tradesName = wb.SheetNames.find(n => n.toLowerCase().includes('завершенные') || n.toLowerCase().includes('завершённые'));
+        const buyAverages = {};
+        if (tradesName) {
+          const tRows = XLSX.utils.sheet_to_json(wb.Sheets[tradesName], { header: 1 });
+          const summary = {};
+          tRows.forEach(r => {
+            if (!r) return;
+            let isin = '', idx = -1;
+            r.forEach((c, j) => { const m = String(c || '').trim().match(/\b(RU[A-Z0-9]{10}|US[A-Z0-9]{10})\b/); if(m){ isin = m[1]; idx = j; } });
+            if (isin && idx >= 0) {
+              const nums = [];
+              for (let k = idx + 1; k < r.length; k++) { const v = parseAmount(r[k]); if (v > 0) nums.push(v); }
+              if (nums.length >= 2) {
+                const qty = nums[0], val = nums.length >= 3 ? nums[2] : (qty * nums[1]);
+                const rowStr = r.map(c => String(c || '')).join(' ').toLowerCase();
+                if (!rowStr.includes('репо') && qty > 0 && val > 0) {
+                  if (!summary[isin]) summary[isin] = { q: 0, v: 0 };
+                  summary[isin].q += qty; summary[isin].v += val;
+                }
+              }
+            }
+          });
+          for (let isin in summary) buyAverages[isin] = summary[isin].v / summary[isin].q;
+        }
+
+        const posName = wb.SheetNames.find(n => n.toLowerCase().includes('динамика')) || wb.SheetNames[0];
+        let positions = [];
+        if (posName) {
+          const pRows = XLSX.utils.sheet_to_json(wb.Sheets[posName], { header: 1 }).filter(r => r && r.some(c => c !== null && String(c).trim() !== ''));
+          const processed = new Set();
+          pRows.forEach((r, i) => {
+            let isin = '';
+            r.forEach(c => { const m = String(c || '').trim().match(/\b(RU[A-Z0-9]{10}|US[A-Z0-9]{10})\b/); if(m) isin = m[1]; });
+            if (isin && !processed.has(isin)) {
+              processed.add(isin);
+              const prev = pRows[i - 1] || [];
+              const strCand = prev.filter(c => typeof c === 'string' && c.trim().length > 3 && !['Акции', 'Прочее', 'НРД', 'Валюта', 'Инструмент'].includes(c.trim()));
+              const name = strCand.length > 0 ? String(strCand[0]).replace(/["'»«]/g, '').trim() : isin;
+              const nums = [];
+              prev.forEach(c => { const v = parseAmount(c); if (v > 0) nums.push(v); });
+              const qty = nums.length > 0 ? nums[0] : 0;
+              const alfaVal = nums.length > 1 ? nums[1] : 0;
+              const avgBuy = buyAverages[isin] || (alfaVal > 0 && qty > 0 ? alfaVal / qty : 0);
+              const buyCost = avgBuy * qty;
+
+              if (qty > 0) {
+                positions.push({ id: i, isin, name, qty, alfaValue: alfaVal, avgBuyPrice: avgBuy, buyCost, price: alfaVal > 0 ? alfaVal / qty : avgBuy });
+              }
+            }
+          });
+        }
+
+        state.payments = payments;
+        state.positions = positions;
+
+        const years = Array.from(new Set(payments.map(p => p.dateObj.getFullYear()))).sort((a,b)=>b-a);
+        const cardSelect = document.getElementById('cardYearSelect');
+        const chartSelect = document.getElementById('chartYearSelect');
+        cardSelect.innerHTML = '<option value="all">Все года</option>' + years.map(y => `<option value="${y}" ${y===2026?'selected':''}>${y} год</option>`).join('');
+        chartSelect.innerHTML = '<option value="all">Все года</option>' + years.map(y => `<option value="${y}">${y} год</option>`).join('');
+        state.selectedCardYear = '2026';
+        state.selectedChartYear = 'all';
+
+        uploadScreen.classList.add('hidden');
+        document.getElementById('dashboardScreen').classList.remove('hidden');
+
+        renderMetrics(); renderPortfolio(); renderCharts(); renderPayoutsTable();
+        if (positions.length > 0) fetchMoexQuotes();
+
+      } catch (err) {
+        alert('Ошибка при чтении файла: ' + err.message);
+      } finally {
+        loadingText.classList.add('hidden');
+      }
+    }
+
+    function renderMetrics() {
+      const totalNet = state.payments.reduce((s, p) => s + p.netAmount, 0);
+      const totalTax = state.payments.reduce((s, p) => s + (p.tax || 0), 0);
+      let months = 1;
+      if (state.payments.length > 0) {
+        const f = state.payments[0].dateObj, l = state.payments[state.payments.length-1].dateObj;
+        months = Math.max(1, (l.getFullYear() - f.getFullYear())*12 + (l.getMonth() - f.getMonth()) + 1);
+      }
+
+      const cardYear = state.selectedCardYear;
+      const cardNet = state.payments.filter(p => cardYear === 'all' || p.dateObj.getFullYear() === Number(cardYear)).reduce((s, p) => s + p.netAmount, 0);
+      const cardTax = state.payments.filter(p => cardYear === 'all' || p.dateObj.getFullYear() === Number(cardYear)).reduce((s, p) => s + (p.tax || 0), 0);
+
+      const totalBuy = state.positions.reduce((s, p) => s + (p.buyCost || p.alfaValue || 0), 0);
+      const portVal = state.positions.reduce((s, p) => {
+        const t = KNOWN_TICKERS[p.isin];
+        const m = state.moexData[p.isin] || (t ? state.moexData[t] : null);
+        return s + (m && m.price > 0 ? p.qty * m.price : (p.alfaValue || p.buyCost || 0));
+      }, 0);
+
+      const diff = portVal - totalBuy;
+      const diffPct = totalBuy > 0 ? (diff / totalBuy) * 100 : 0;
+
+      document.getElementById('totalNetEl').innerText = formatCurrency(totalNet);
+      document.getElementById('totalTaxEl').innerText = formatCurrency(totalTax);
+      document.getElementById('avgMonthlyEl').innerText = formatCurrency(totalNet / months);
+      document.getElementById('monthsCountEl').innerText = `За ${months} мес. истории`;
+      document.getElementById('cardYearPayoutsEl').innerText = formatCurrency(cardNet);
+      document.getElementById('cardYearTaxEl').innerText = formatCurrency(cardTax);
+
+      document.getElementById('portfolioValueEl').innerText = formatCurrency(portVal);
+      const diffEl = document.getElementById('portfolioDiffEl');
+      diffEl.className = `inline-flex items-center space-x-1 px-3 py-1 rounded-xl text-sm font-bold ${diff >= 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`;
+      diffEl.innerText = `${diff >= 0 ? '▲ +' : '▼ '}${formatCurrency(diff)} (${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(2)}%)`;
+      document.getElementById('portfolioCostEl').innerText = `от суммы покупок (${formatCurrency(totalBuy)})`;
+      document.getElementById('positionsCountEl').innerText = `${state.positions.length} активов`;
+    }
+
+    function renderPortfolio() {
+      const portVal = state.positions.reduce((s, p) => {
+        const t = KNOWN_TICKERS[p.isin];
+        const m = state.moexData[p.isin] || (t ? state.moexData[t] : null);
+        return s + (m && m.price > 0 ? p.qty * m.price : (p.alfaValue || p.buyCost || 0));
+      }, 0);
+
+      const tbody = document.getElementById('portfolioTableBody');
+      tbody.innerHTML = state.positions.map(p => {
+        const t = KNOWN_TICKERS[p.isin];
+        const m = state.moexData[p.isin] || (t ? state.moexData[t] : null);
+        const price = m?.price || p.price || 0;
+        const val = m?.price > 0 ? p.qty * m.price : (p.alfaValue || 0);
+        const share = portVal > 0 && val > 0 ? (val / portVal) * 100 : 0;
+        const ticker = m?.secid || t || p.isin.substring(0, 6);
+
+        return `
+          <tr class="hover:bg-slate-800/40 transition-colors">
+            <td class="px-5 py-3.5 font-bold text-emerald-400 text-sm">${ticker}</td>
+            <td class="px-5 py-3.5 text-white font-sans font-medium">
+              <div>${p.name}</div>
+              <div class="text-[10px] text-slate-500">${p.isin}</div>
+            </td>
+            <td class="px-5 py-3.5 text-right text-slate-200">${p.qty.toLocaleString('ru-RU')}</td>
+            <td class="px-5 py-3.5 text-right text-slate-400">${formatCurrency(p.avgBuyPrice)}</td>
+            <td class="px-5 py-3.5 text-right text-blue-400">${price > 0 ? formatCurrency(price) : '—'}</td>
+            <td class="px-5 py-3.5 text-right font-bold text-purple-400">${val > 0 ? formatCurrency(val) : '—'}</td>
+            <td class="px-5 py-3.5 text-right text-slate-400 font-sans">${share > 0 ? share.toFixed(1) + '%' : '—'}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderCharts() {
+      const filtered = state.payments.filter(p => {
+        if (state.filter === 'dividend' && p.type !== 'dividend') return false;
+        if (state.filter === 'coupon' && p.type !== 'coupon') return false;
+        return true;
+      });
+
+      const byYear = {};
+      filtered.forEach(p => { const y = p.dateObj.getFullYear(); byYear[y] = (byYear[y] || 0) + p.netAmount; });
+      const years = Object.keys(byYear).sort();
+      
+      if (state.charts.yearly) state.charts.yearly.destroy();
+      state.charts.yearly = new Chart(document.getElementById('yearlyChart'), {
+        type: 'bar',
+        data: { labels: years, datasets: [{ data: years.map(y => byYear[y]), backgroundColor: '#3b82f6', borderRadius: 4 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#94a3b8' } }, y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } }
+      });
+
+      let cum = 0;
+      const cumData = filtered.map(p => { cum += p.netAmount; return { x: p.dateObj.toLocaleDateString('ru-RU'), y: cum }; });
+      
+      if (state.charts.cumulative) state.charts.cumulative.destroy();
+      state.charts.cumulative = new Chart(document.getElementById('cumulativeChart'), {
+        type: 'line',
+        data: { labels: cumData.map(d => d.x), datasets: [{ data: cumData.map(d => d.y), borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true, tension: 0.2, pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } }
+      });
+
+      const monthsNames = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+      const mData = new Array(12).fill(0);
+      filtered.forEach(p => {
+        if (state.selectedChartYear === 'all' || p.dateObj.getFullYear() === Number(state.selectedChartYear)) {
+          mData[p.dateObj.getMonth()] += p.netAmount;
+        }
+      });
+
+      if (state.charts.monthly) state.charts.monthly.destroy();
+      state.charts.monthly = new Chart(document.getElementById('monthlyChart'), {
+        type: 'bar',
+        data: { labels: monthsNames, datasets: [{ data: mData, backgroundColor: '#f59e0b', borderRadius: 4 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#94a3b8' } }, y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } }
+      });
+
+      const byAsset = {};
+      filtered.forEach(p => { byAsset[p.asset] = (byAsset[p.asset] || 0) + p.netAmount; });
+      const sorted = Object.entries(byAsset).sort((a,b) => b[1] - a[1]);
+      const top = sorted.slice(0, 5);
+      const others = sorted.slice(5).reduce((s, [,v]) => s + v, 0);
+      if (others > 0) top.push(['Остальные', others]);
+
+      if (state.charts.donors) state.charts.donors.destroy();
+      state.charts.donors = new Chart(document.getElementById('donorsChart'), {
+        type: 'doughnut',
+        data: {
+          labels: top.map(t => t[0]),
+          datasets: [{ data: top.map(t => t[1]), backgroundColor: ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#64748b'] }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 10, font: { size: 10 } } } } }
+      });
+    }
+
+    function renderPayoutsTable() {
+      const q = state.searchQuery.toLowerCase();
+      const filtered = state.payments.filter(p => {
+        if (state.filter === 'dividend' && p.type !== 'dividend') return false;
+        if (state.filter === 'coupon' && p.type !== 'coupon') return false;
+        if (q && !p.asset.toLowerCase().includes(q)) return false;
+        return true;
+      });
+
+      const tbody = document.getElementById('payoutsTableBody');
+      tbody.innerHTML = filtered.slice().reverse().map(p => `
+        <tr class="hover:bg-slate-800/40 transition-colors">
+          <td class="px-6 py-3 text-slate-400">${p.dateObj.toLocaleDateString('ru-RU')}</td>
+          <td class="px-6 py-3">
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium ${p.type === 'dividend' ? 'bg-blue-900/40 text-blue-300 border border-blue-800/50' : 'bg-yellow-900/40 text-yellow-300 border border-yellow-800/50'}">
+              ${p.typeName}
+            </span>
+          </td>
+          <td class="px-6 py-3 text-white font-medium font-sans">${p.asset}</td>
+          <td class="px-6 py-3 text-right text-emerald-400 font-bold">+${formatCurrency(p.netAmount)}</td>
+          <td class="px-6 py-3 text-right text-slate-400">${p.tax > 0 ? formatCurrency(p.tax) : '—'}</td>
+        </tr>
+      `).join('');
+    }
+  </script>
+</body>
+</html>
