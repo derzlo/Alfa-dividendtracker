@@ -116,7 +116,7 @@
 <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
 <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Доходность на вложенный капитал</div>
 <div class="text-2xl font-bold text-blue-400 mt-2" id="yieldCostEl">—</div>
-<div class="text-xs text-slate-500 mt-2" id="yieldCostSubEl">дивиденды / стоимость позиций</div>
+<div class="text-xs text-slate-500 mt-2" id="yieldCostSubEl">дивиденды за всё время / стоимость покупок</div>
 </div>
 <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
 <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Рост выплат YoY</div>
@@ -812,8 +812,10 @@
       const ltm = payments.filter(p => p.dateObj >= last12Cut).reduce((s,p)=>s+(p.netAmount||0),0);
       const totalDiv = payments.reduce((s,p)=>s+(p.netAmount||0),0);
 
+      // FIXED v3: YOC считаем от суммы покупок, а не от текущей стоимости
+      const totalBuyCost = (state.positions||[]).reduce((s,p)=>s+(p.buyCost||p.alfaValue||0),0);
       setText('yieldCurrentEl', portVal > 0 ? ((totalDiv/portVal)*100).toFixed(2)+'%' : '—');
-      document.getElementById('yieldCostEl').innerText = portVal > 0 ? ((totalDiv/portVal)*100).toFixed(2)+'%' : '—';
+      document.getElementById('yieldCostEl').innerText = totalBuyCost > 0 ? ((totalDiv/totalBuyCost)*100).toFixed(2)+'%' : '—';
 
       let yoyText='—', yoySub='недостаточно данных';
       if(years.length>=2){
